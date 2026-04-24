@@ -39,7 +39,7 @@ def play_alarm(severity="MEDIUM"):
 
 # ─────────────────── THEME DEFINITIONS ───────────────────
 THEMES = {
-    "🟢 Tactical Green HUD": {
+    "🟢 Tactical Green": {
         # Radar-green on near-black — real army HUD / radar room aesthetic
         "bg":         "#020d02",
         "bg2":        "#041404",
@@ -236,7 +236,7 @@ THEMES = {
 
 # ─────────────────── THEME SELECTION (early, before sidebar) ───────────────────
 if "theme" not in st.session_state:
-    st.session_state.theme = "🟢 Tactical Green HUD"
+    st.session_state.theme = "🟢 Tactical Green"
 
 # ─────────────────── APPLY THEME ───────────────────
 def apply_theme(t):
@@ -621,6 +621,77 @@ hr {{ border-color: var(--border) !important; }}
 
 apply_theme(st.session_state.theme)
 
+# ─────────────────── UPGRADED MODULE IMPORTS ───────────────────
+# Import face recognition and utility modules (graceful if missing)
+try:
+    from face_module import FaceRecognizer, draw_face_results, face_module_status, FACE_LIB_OK
+except ImportError:
+    FACE_LIB_OK = False
+    class FaceRecognizer:
+        encodings_loaded = False
+        def load_encodings(self, *a, **k): return False
+        def process_frame(self, *a, **k): return []
+        def encoding_count(self): return 0
+        def known_people(self): return []
+    def draw_face_results(f, r): return f
+    def face_module_status(fr): return {"library_ok": False, "encodings_loaded": False,
+                                         "known_count": 0, "known_people": [], "active_tracks": 0}
+
+try:
+    from utils import (enhance_night_vision, enhance_basic, NightVisionConfig,
+                       draw_night_vision_indicator, draw_face_rec_indicator,
+                       draw_zone_overlay, draw_detection, draw_hud)
+    UTILS_OK = True
+except ImportError:
+    UTILS_OK = False
+    # Fallback inline versions so app still runs without utils.py
+    def enhance_night_vision(frame, cfg=None, night_mode=True):
+        if not night_mode: return frame
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+        return cv2.cvtColor(cv2.merge([clahe.apply(l), a, b]), cv2.COLOR_LAB2BGR)
+    def enhance_basic(frame): return frame
+    class NightVisionConfig: pass
+    def draw_night_vision_indicator(f, a): return f
+    def draw_face_rec_indicator(f, a, n): return f
+
+    def draw_zone_overlay(frame, zones):
+        for z in zones:
+            ov = frame.copy()
+            cv2.rectangle(ov, (z["left"],z["top"]), (z["right"],z["bottom"]), (0,0,200), -1)
+            cv2.addWeighted(ov, 0.07, frame, 0.93, 0, frame)
+            cv2.rectangle(frame, (z["left"],z["top"]), (z["right"],z["bottom"]), (0,0,220), 2)
+            tl = 18
+            for sx,sy,dx,dy in [(z["left"],z["top"],1,1),(z["right"],z["top"],-1,1),
+                                 (z["left"],z["bottom"],1,-1),(z["right"],z["bottom"],-1,-1)]:
+                cv2.line(frame,(sx,sy),(sx+dx*tl,sy),(0,0,255),2)
+                cv2.line(frame,(sx,sy),(sx,sy+dy*tl),(0,0,255),2)
+            cv2.putText(frame, z["name"], (z["left"]+8, z["top"]-10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (60,60,255), 2)
+
+    def draw_detection(frame, x1,y1,x2,y2, label, conf, color, intruding):
+        lw = 3 if intruding else 2
+        cv2.rectangle(frame,(x1,y1),(x2,y2),color,lw)
+        if intruding:
+            cv2.rectangle(frame,(x1-2,y1-2),(x2+2,y2+2),(0,0,255),1)
+        txt = f"{label}  {conf:.0%}"
+        (tw,th),_ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, 0.52, 2)
+        cv2.rectangle(frame,(x1,y1-th-8),(x1+tw+6,y1),color,-1)
+        cv2.putText(frame,txt,(x1+3,y1-4),cv2.FONT_HERSHEY_SIMPLEX,0.52,(0,0,0),2)
+        bw = int((x2-x1)*conf)
+        cv2.rectangle(frame,(x1,y2+2),(x1+bw,y2+6),color,-1)
+
+    def draw_hud(frame, fps, n_det, model_name, night_on=False, fr_on=False):
+        ts = datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
+        fw = frame.shape[1]
+        lines = [f"FPS  {fps:4.1f}", f"DET  {n_det}", f"MDL  {model_name}",
+                 f"NV   {'ON' if night_on else 'OFF'}", f"FR   {'ON' if fr_on else 'OFF'}"]
+        for i, line in enumerate(lines):
+            cv2.putText(frame,line,(10,22+i*20),cv2.FONT_HERSHEY_SIMPLEX,0.5,(0,255,100),1)
+        cv2.putText(frame,ts,(fw-235,22),cv2.FONT_HERSHEY_SIMPLEX,0.48,(0,255,100),1)
+
+
 # ─────────────────── JS AUDIO ALARM (browser-side) ───────────────────
 def inject_alarm_js(severity="MEDIUM"):
     """Inject Web Audio API alarm that plays in the browser immediately."""
@@ -629,7 +700,7 @@ def inject_alarm_js(severity="MEDIUM"):
         "MEDIUM": [(1200,0.18),(1200,0.18),(1200,0.18)],
         "LOW":    [(800,0.22),(800,0.22)],
     }
-    beeps = patterns.get(severity, patterns["MEDIUM"])
+    beeps   = patterns.get(severity, patterns["MEDIUM"])
     beep_js = ", ".join(f"[{f},{d}]" for f,d in beeps)
     st.markdown(f"""
 <script>
@@ -661,18 +732,18 @@ st.markdown(f"""
     <span style='font-size:0.58rem;opacity:0.6;'>{now_str}</span>
   </div>
   <div class='header-title'>🛡️ AI BORDER SURVEILLANCE</div>
-  <div class='header-sub'>YOLOV8 · REAL-TIME · MULTI-CLASS DETECTION · ZONE INTRUSION ALERT</div>
+  <div class='header-sub'>YOLOV8 · FACE RECOGNITION · NIGHT VISION · ZONE INTRUSION ALERT</div>
 </div>
 """, unsafe_allow_html=True)
 
 # ─────────────────── PATHS & LOG ───────────────────
 os.makedirs("intruders", exist_ok=True)
+os.makedirs("dataset",   exist_ok=True)
 
 LOG_FILE = "intrusion_log.csv"
-COLS     = ["Time", "Type", "Confidence", "Zone", "Severity", "Status"]
+COLS     = ["Time", "Type", "Confidence", "Zone", "Severity", "Status", "FaceName"]
 
 def ensure_log():
-    """Create or repair the CSV log."""
     if not os.path.exists(LOG_FILE):
         pd.DataFrame(columns=COLS).to_csv(LOG_FILE, index=False)
         return
@@ -680,7 +751,6 @@ def ensure_log():
         df_check = pd.read_csv(LOG_FILE, nrows=0)
         missing  = [c for c in COLS if c not in df_check.columns]
         if missing:
-            # migrate: rename old file and start fresh
             os.rename(LOG_FILE, LOG_FILE + ".bak")
             pd.DataFrame(columns=COLS).to_csv(LOG_FILE, index=False)
     except Exception:
@@ -689,7 +759,6 @@ def ensure_log():
 ensure_log()
 
 def read_log():
-    """Returns clean DataFrame, never raises."""
     try:
         df = pd.read_csv(LOG_FILE, on_bad_lines="skip")
         for c in COLS:
@@ -701,7 +770,7 @@ def read_log():
     except Exception:
         return pd.DataFrame(columns=COLS)
 
-def append_log(itype, conf, zone_name, severity):
+def append_log(itype, conf, zone_name, severity, face_name="—"):
     row = {
         "Time":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "Type":       itype,
@@ -709,10 +778,11 @@ def append_log(itype, conf, zone_name, severity):
         "Zone":       zone_name,
         "Severity":   severity,
         "Status":     f"INTRUSION-{severity}",
+        "FaceName":   face_name,
     }
     pd.DataFrame([row]).to_csv(LOG_FILE, mode="a", header=False, index=False)
     st.session_state.live_log.appendleft(row)
-    st.session_state.total_today  += 1
+    st.session_state.total_today   += 1
     st.session_state.zone_breaches += 1
 
 # ─────────────────── MODEL LOAD ───────────────────
@@ -722,6 +792,14 @@ def load_model(path):
         return YOLO(path), None
     except Exception as e:
         return None, str(e)
+
+# ─────────────────── FACE RECOGNIZER (cached singleton) ───────────────────
+@st.cache_resource
+def get_face_recognizer():
+    """Load and cache the FaceRecognizer across Streamlit reruns."""
+    fr = FaceRecognizer()
+    fr.load_encodings()
+    return fr
 
 # ─────────────────── CLASS MAP ───────────────────
 CLASS_MAP = {
@@ -738,7 +816,7 @@ CLASS_MAP = {
     "cow":        ("ANIMAL",     (255,200,  30), "MEDIUM"),
     "horse":      ("ANIMAL",     (255,200,  30), "MEDIUM"),
     "sheep":      ("ANIMAL",     (255,200,  30), "LOW"),
-    "bird":       ("ANIMAL",     (255,200,  30), "LOW"),
+    "bird":        ("ANIMAL",    (255,200,  30), "LOW"),
     "bear":       ("ANIMAL",     (0,   80, 255), "HIGH"),
     "elephant":   ("ANIMAL",     (0,   80, 255), "HIGH"),
     "knife":      ("WEAPON",     (0,   0,  255), "HIGH"),
@@ -754,17 +832,21 @@ SEV_RANK = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
 
 # ─────────────────── SESSION STATE ───────────────────
 for k, v in {
-    "run": False,
-    "live_log": deque(maxlen=40),
-    "total_today": 0,
-    "zone_breaches": 0,
-    "alarm_active": False,
-    "last_snap_time": 0,
+    "run":             False,
+    "live_log":        deque(maxlen=40),
+    "total_today":     0,
+    "zone_breaches":   0,
+    "authorized_passes": 0,
+    "alarm_active":    False,
+    "last_snap_time":  0,
     "last_alarm_time": 0,
-    "theme": "🖥️ Professional",
+    "theme":           "🟢 Tactical Green",
+    "frame_count":     0,
+    "nv_cfg":          None,     # NightVisionConfig instance (built lazily)
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
 
 # ─────────────────── SIDEBAR ───────────────────
 with st.sidebar:
@@ -773,10 +855,9 @@ with st.sidebar:
                     label_visibility="collapsed")
 
     st.markdown("<div class='section-title'>THEME</div>", unsafe_allow_html=True)
-    # Guard: if stored theme no longer exists (e.g. old session), reset to default
     _theme_keys = list(THEMES.keys())
     if st.session_state.theme not in _theme_keys:
-        st.session_state.theme = "🟢 Tactical Green HUD"
+        st.session_state.theme = "🟢 Tactical Green"
     chosen_theme = st.selectbox(
         "UI Theme", _theme_keys,
         index=_theme_keys.index(st.session_state.theme),
@@ -796,13 +877,67 @@ with st.sidebar:
     )
     model, model_err = load_model(model_choice)
 
+    # ── FACE RECOGNITION SECTION ────────────────────
+    st.markdown("<div class='section-title'>FACE RECOGNITION</div>", unsafe_allow_html=True)
+    face_rec_on = st.checkbox("Enable Face Recognition", value=True,
+                               help="Requires encodings.pkl — run train_faces.py first")
+    fr = get_face_recognizer()
+    fr_status = face_module_status(fr)
+
+    if face_rec_on:
+        if not fr_status["library_ok"]:
+            st.markdown('<div class="alert-box" style="font-size:0.7rem;">face_recognition not installed.<br>pip install face_recognition</div>',
+                        unsafe_allow_html=True)
+        elif not fr_status["encodings_loaded"]:
+            st.markdown('<div class="alert-box warn" style="font-size:0.7rem;">encodings.pkl not found.<br>Run: python train_faces.py</div>',
+                        unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div class="alert-box ok" style="font-size:0.7rem;">✓ {fr_status["known_count"]} encodings · {len(fr_status["known_people"])} person(s)</div>',
+                        unsafe_allow_html=True)
+
+    fr_tolerance = st.slider("Face Match Tolerance", 0.35, 0.70, 0.50, 0.05,
+                              help="Lower = stricter match (fewer false positives)")
+    fr.tolerance  = fr_tolerance
+    fr_skip       = st.slider("Face Rec Frame Skip", 1, 8, 3, 1,
+                               help="Run face-rec every N frames (higher = faster)")
+    fr.skip       = fr_skip
+
+    # ── NIGHT VISION SECTION ─────────────────────────
+    st.markdown("<div class='section-title'>NIGHT VISION</div>", unsafe_allow_html=True)
+    night_mode_on  = st.checkbox("Enable Night Vision Mode", value=False,
+                                  help="Full pipeline: CLAHE + Gamma + Denoise + Sharpen")
+    green_tint_on  = st.checkbox("Green Tint (NV Goggles)", value=False,
+                                  help="Classic phosphor green overlay")
+    nv_gamma       = st.slider("Gamma (brighten dark areas)", 0.2, 1.0, 0.55, 0.05,
+                                help="< 0.5 = very bright, 1.0 = no change")
+    nv_clahe_clip  = st.slider("CLAHE Clip Limit", 1.0, 6.0, 3.0, 0.5)
+    nv_brightness  = st.slider("Brightness Boost", 0, 80, 25, 5)
+    nv_contrast    = st.slider("Contrast Multiplier", 1.0, 2.0, 1.25, 0.05)
+    nv_sharpen     = st.checkbox("Sharpen", value=True)
+    nv_denoise     = st.checkbox("Denoise (bilateral)", value=True)
+
+    # Build NightVisionConfig from sidebar params
+    if UTILS_OK:
+        nv_cfg = NightVisionConfig(
+            clahe_clip      = nv_clahe_clip,
+            gamma           = nv_gamma,
+            brightness      = nv_brightness,
+            contrast        = nv_contrast,
+            sharpen         = nv_sharpen,
+            denoise         = nv_denoise,
+            green_tint      = green_tint_on,
+        )
+    else:
+        nv_cfg = None
+
+    # ── DETECTION TUNING ────────────────────────────
     st.markdown("<div class='section-title'>DETECTION TUNING</div>", unsafe_allow_html=True)
     conf_thresh  = st.slider("Confidence Threshold", 0.10, 0.90, 0.35, 0.05)
     iou_thresh   = st.slider("IoU / NMS Threshold",  0.10, 0.90, 0.40, 0.05)
     smoothing    = st.slider("Temporal Smoothing (frames)", 1, 6, 3, 1,
                               help="Require detection in N consecutive frames before alerting")
     img_size     = st.select_slider("Inference Size (px)", [320,416,512,640,768,1024], value=640)
-    enhance_img  = st.checkbox("Enhance Low-Light Frames", value=True)
+    enhance_img  = st.checkbox("Basic Low-Light (when NV off)", value=True)
     filter_cls   = st.multiselect("Only Detect Classes", list(CLASS_MAP.keys()))
 
     st.markdown("<div class='section-title'>RESTRICTED ZONE</div>", unsafe_allow_html=True)
@@ -818,50 +953,12 @@ with st.sidebar:
     show_hud      = st.checkbox("Show HUD Overlay", value=True)
 
 # ─────────────────── ZONE HELPERS ───────────────────
-ZONES = [{"name":"RESTRICTED ZONE","top":zone_top,"bottom":zone_bottom,
-          "left":zone_left,"right":zone_right}]
+ZONES = [{"name": "RESTRICTED ZONE", "top": zone_top, "bottom": zone_bottom,
+          "left": zone_left, "right": zone_right}]
 
 def pt_in_zone(cx, cy, z):
     return z["left"] <= cx <= z["right"] and z["top"] <= cy <= z["bottom"]
 
-# ─────────────────── FRAME HELPERS ───────────────────
-def enhance_frame(frame):
-    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-    return cv2.cvtColor(cv2.merge([clahe.apply(l), a, b]), cv2.COLOR_LAB2BGR)
-
-def draw_zone_overlay(frame, zones):
-    for z in zones:
-        ov = frame.copy()
-        cv2.rectangle(ov, (z["left"],z["top"]), (z["right"],z["bottom"]), (0,0,200), -1)
-        cv2.addWeighted(ov, 0.07, frame, 0.93, 0, frame)
-        cv2.rectangle(frame, (z["left"],z["top"]), (z["right"],z["bottom"]), (0,0,220), 2)
-        tl = 18
-        for sx,sy,dx,dy in [(z["left"],z["top"],1,1),(z["right"],z["top"],-1,1),
-                             (z["left"],z["bottom"],1,-1),(z["right"],z["bottom"],-1,-1)]:
-            cv2.line(frame,(sx,sy),(sx+dx*tl,sy),(0,0,255),2)
-            cv2.line(frame,(sx,sy),(sx,sy+dy*tl),(0,0,255),2)
-        cv2.putText(frame, z["name"], (z["left"]+8, z["top"]-10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (60,60,255), 2)
-
-def draw_detection(frame, x1,y1,x2,y2, label, conf, color, intruding):
-    lw = 3 if intruding else 2
-    cv2.rectangle(frame,(x1,y1),(x2,y2),color,lw)
-    if intruding:
-        cv2.rectangle(frame,(x1-2,y1-2),(x2+2,y2+2),(0,0,255),1)
-    txt = f"{label}  {conf:.0%}"
-    (tw,th),_ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, 0.52, 2)
-    cv2.rectangle(frame,(x1,y1-th-8),(x1+tw+6,y1),color,-1)
-    cv2.putText(frame,txt,(x1+3,y1-4),cv2.FONT_HERSHEY_SIMPLEX,0.52,(0,0,0),2)
-    bw = int((x2-x1)*conf)
-    cv2.rectangle(frame,(x1,y2+2),(x1+bw,y2+6),color,-1)
-
-def draw_hud(frame, fps, n_det, fw):
-    ts = datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
-    for i,(line) in enumerate([f"FPS  {fps:4.1f}", f"DET  {n_det}", f"MDL  {model_choice}"]):
-        cv2.putText(frame,line,(10,22+i*20),cv2.FONT_HERSHEY_SIMPLEX,0.5,(0,255,100),1)
-    cv2.putText(frame,ts,(fw-235,22),cv2.FONT_HERSHEY_SIMPLEX,0.48,(0,255,100),1)
 
 # ─────────────────── LIVE LOG HTML ───────────────────
 def render_live_log(entries):
@@ -869,23 +966,27 @@ def render_live_log(entries):
         return "<div class='alert-box ok' style='font-size:0.75rem;'>No intrusions yet.</div>"
     html = ""
     for e in list(entries)[:10]:
-        t  = str(e.get("Time",""))[-8:]
-        tp = e.get("Type","?")
-        sv = e.get("Severity","")
-        cf = e.get("Confidence",0)
+        t    = str(e.get("Time",""))[-8:]
+        tp   = e.get("Type","?")
+        sv   = e.get("Severity","")
+        cf   = e.get("Confidence", 0)
+        face = e.get("FaceName", "—")
         try:  cf_str = f"{float(cf):.0%}"
         except: cf_str = str(cf)
         sv_col = "#ff3333" if sv=="HIGH" else "#ffcc00" if sv=="MEDIUM" else "#00ff9f"
+        face_html = (f"<span style='color:#44cc88;font-size:0.65rem'>{face}</span>"
+                     if face not in ("—", "UNKNOWN", "") else "")
         html += (f"<div class='log-entry'>"
                  f"<span style='color:rgba(0,255,159,0.45)'>{t}</span>"
                  f"<span class='badge badge-{tp}'>{tp}</span>"
                  f"<span>{cf_str}</span>"
                  f"<span style='color:{sv_col}'>{sv}</span>"
+                 f"{face_html}"
                  f"</div>")
     return html
 
 # ═══════════════════════════════════════════════════════
-# PAGE: LIVE SURVEILLANCE
+# PAGE: LIVE SURVEILLANCE  (upgraded)
 # ═══════════════════════════════════════════════════════
 if menu == "🎥 Live Surveillance":
 
@@ -895,7 +996,7 @@ if menu == "🎥 Live Surveillance":
     left_col, right_col = st.columns([3, 1])
 
     with left_col:
-        b1,b2,b3 = st.columns(3)
+        b1, b2, b3, b4 = st.columns(4)
         with b1:
             if st.button("▶  START SURVEILLANCE"):
                 st.session_state.run = True
@@ -905,6 +1006,10 @@ if menu == "🎥 Live Surveillance":
         with b3:
             if st.button("📸  FORCE SNAPSHOT"):
                 st.session_state.last_snap_time = 0
+        with b4:
+            if st.button("🔄  RELOAD FACES"):
+                fr.load_encodings()
+                st.rerun()
         feed_ph   = st.empty()
         status_ph = st.empty()
 
@@ -931,7 +1036,7 @@ if menu == "🎥 Live Surveillance":
         cap.set(cv2.CAP_PROP_FPS, 30)
 
         frame_times = deque(maxlen=30)
-        track_buf   = {}   # label -> deque of bool
+        track_buf   = {}    # yolo label -> deque of bool (temporal smoothing)
 
         while st.session_state.run:
             t0 = time.time()
@@ -943,87 +1048,175 @@ if menu == "🎥 Live Surveillance":
                 continue
 
             fh, fw = frame.shape[:2]
-            inf_frame = enhance_frame(frame) if enhance_img else frame
+            st.session_state.frame_count += 1
+            fc = st.session_state.frame_count
+
+            # ── IMAGE ENHANCEMENT ──────────────────────────────────────
+            # Night vision pipeline (full) OR basic CLAHE fallback
+            if night_mode_on:
+                inf_frame = enhance_night_vision(frame, cfg=nv_cfg, night_mode=True)
+            elif enhance_img:
+                inf_frame = enhance_basic(frame)
+            else:
+                inf_frame = frame
+
+            # ── ZONE OVERLAY ───────────────────────────────────────────
             draw_zone_overlay(frame, ZONES)
 
-            yolo_kw = {"verbose":False,"conf":conf_thresh,"iou":iou_thresh,"imgsz":img_size}
+            # ── YOLO DETECTION ─────────────────────────────────────────
+            yolo_kw = {"verbose": False, "conf": conf_thresh, "iou": iou_thresh, "imgsz": img_size}
             if filter_cls:
-                ids = [i for i,n in model.names.items() if n in filter_cls]
-                if ids: yolo_kw["classes"] = ids
+                ids = [i for i, n in model.names.items() if n in filter_cls]
+                if ids:
+                    yolo_kw["classes"] = ids
 
-            results = model(inf_frame, **yolo_kw)
-            intrusions = []   # (itype, conf, severity, label)
+            results    = model(inf_frame, **yolo_kw)
+            intrusions = []   # (itype, conf, severity, label, face_name)
 
             for r in results:
                 for box in r.boxes:
-                    x1,y1,x2,y2 = map(int, box.xyxy[0])
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
                     cls   = int(box.cls[0])
                     label = model.names[cls]
                     conf  = float(box.conf[0])
-                    itype,color,severity = CLASS_MAP.get(label,(label.upper(),(80,200,80),"LOW"))
+                    itype, color, severity = CLASS_MAP.get(label, (label.upper(), (80,200,80), "LOW"))
 
-                    cx,cy   = (x1+x2)//2, (y1+y2)//2
-                    in_zone = any(pt_in_zone(cx,cy,z) for z in ZONES)
+                    cx, cy  = (x1+x2)//2, (y1+y2)//2
+                    in_zone = any(pt_in_zone(cx, cy, z) for z in ZONES)
 
+                    # Temporal smoothing buffer
                     buf = track_buf.setdefault(label, deque(maxlen=smoothing))
                     buf.append(in_zone)
-                    confirmed = sum(buf) >= max(1, smoothing-1)
+                    confirmed = sum(buf) >= max(1, smoothing - 1)
 
-                    draw_detection(frame,x1,y1,x2,y2,label,conf,color,intruding=confirmed)
+                    # ── FACE RECOGNITION (only for PERSON detections) ──
+                    face_name   = "—"
+                    is_authorized = False
+
+                    if label == "person" and face_rec_on and fr.encodings_loaded and confirmed:
+                        face_results = fr.process_frame(frame, fc, roi=(x1, y1, x2, y2))
+
+                        if face_results:
+                            # Use most confident face result in this ROI
+                            best_face   = max(face_results, key=lambda f: f.confidence)
+                            face_name   = best_face.name
+                            is_authorized = best_face.authorized
+
+                            # ── Draw face boxes + labels ──
+                            draw_face_results(frame, face_results)
+
+                            # ── AUTHORIZED: override box color to green, no alarm ──
+                            if is_authorized:
+                                color    = (0, 220, 60)   # green
+                                severity = "LOW"          # downgrade severity
+                                cv2.putText(frame,
+                                            f"✓ AUTHORIZED: {face_name.upper()}",
+                                            (x1, y1 - 28),
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.65,
+                                            (0, 220, 60), 2)
+                                st.session_state.authorized_passes += 1
+                        # If no face detected in ROI — still counts as unknown person
+
+                    # Draw YOLO detection box
+                    draw_detection(frame, x1, y1, x2, y2, label, conf, color,
+                                   intruding=confirmed and not is_authorized)
+
                     if confirmed:
-                        intrusions.append((itype,conf,severity,label))
+                        intrusions.append((itype, conf, severity, label,
+                                           face_name, is_authorized))
 
+            # ── HUD INDICATORS ──────────────────────────────────────────
+            if show_hud:
+                draw_hud(frame, fps=0, n_det=sum(len(r.boxes) for r in results),
+                         model_name=model_choice,
+                         night_on=night_mode_on, fr_on=face_rec_on)
+                draw_night_vision_indicator(frame, night_mode_on)
+                draw_face_rec_indicator(frame, face_rec_on and fr.encodings_loaded,
+                                        fr.encoding_count())
+
+            # ── INTRUSION HANDLING ──────────────────────────────────────
             now = time.time()
-            if intrusions:
-                best = max(intrusions, key=lambda t: SEV_RANK.get(t[2],0))
-                itype,conf,severity,_ = best
-                sev_bgr = {"HIGH":(0,0,255),"MEDIUM":(0,130,255),"LOW":(0,200,80)}.get(severity,(0,0,255))
-                cv2.putText(frame,f"! {itype} INTRUSION [{severity}]",
-                            (20,72),cv2.FONT_HERSHEY_SIMPLEX,0.9,sev_bgr,3)
-                cv2.putText(frame,f"CONF {conf:.0%}",
-                            (20,102),cv2.FONT_HERSHEY_SIMPLEX,0.58,sev_bgr,2)
 
-                # ── Alarm: fires as soon as intrusion detected, independent of snapshot ──
-                alarm_cooldown_secs = 3  # re-trigger alarm at most every 3s
-                if alarm_on and (now - st.session_state.last_alarm_time > alarm_cooldown_secs):
+            # Separate real threats from authorized persons
+            real_threats = [(it,cf,sv,lb,fn,auth)
+                            for it,cf,sv,lb,fn,auth in intrusions if not auth]
+
+            if real_threats:
+                best = max(real_threats, key=lambda t: SEV_RANK.get(t[2], 0))
+                itype, conf, severity, _, face_name, _ = best
+                sev_bgr = {"HIGH":(0,0,255),"MEDIUM":(0,130,255),"LOW":(0,200,80)}.get(severity,(0,0,255))
+
+                cv2.putText(frame, f"! {itype} INTRUSION [{severity}]",
+                            (20, 72), cv2.FONT_HERSHEY_SIMPLEX, 0.9, sev_bgr, 3)
+                if face_name not in ("—", ""):
+                    cv2.putText(frame, f"FACE: {face_name}",
+                                (20, 102), cv2.FONT_HERSHEY_SIMPLEX, 0.58, sev_bgr, 2)
+
+                # Alarm (3s cooldown)
+                if alarm_on and (now - st.session_state.last_alarm_time > 3):
                     st.session_state.last_alarm_time = now
-                    st.session_state.alarm_active = True
-                    # Browser-side audio (works cross-platform in the web UI)
+                    st.session_state.alarm_active    = True
                     inject_alarm_js(severity)
-                    # Native OS beep as fallback (background thread)
                     def _alarm(sev, s):
                         play_alarm(sev); s.alarm_active = False
-                    threading.Thread(target=_alarm, args=(severity, st.session_state), daemon=True).start()
+                    threading.Thread(target=_alarm,
+                                     args=(severity, st.session_state), daemon=True).start()
 
-                # ── Snapshot + log (separate cooldown, not tied to alarm) ──
+                # Snapshot + log
                 if now - st.session_state.last_snap_time > snap_cooldown:
                     st.session_state.last_snap_time = now
                     fname = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    cv2.imwrite(f"intruders/{fname}_{itype}_{severity}.jpg", frame)
-                    append_log(itype, conf, "RESTRICTED ZONE", severity)
+                    fn_clean = face_name.replace(" ", "_") if face_name != "—" else "UNKNOWN"
+                    cv2.imwrite(f"intruders/{fname}_{itype}_{severity}_{fn_clean}.jpg", frame)
+                    append_log(itype, conf, "RESTRICTED ZONE", severity, face_name)
 
                 sc = "#ff3333" if severity=="HIGH" else "#ffcc00" if severity=="MEDIUM" else "#00ff9f"
+                face_disp = f" | FACE: <b>{face_name}</b>" if face_name not in ("—", "") else ""
                 status_ph.markdown(
-                    f'<div class="alert-box">🚨 {itype} | SEVERITY: <span style="color:{sc}">{severity}</span>'
-                    f' | CONF: {conf:.0%} | {datetime.now().strftime("%H:%M:%S")}</div>',
+                    f'<div class="alert-box">🚨 {itype} | SEV: <span style="color:{sc}">{severity}</span>'
+                    f'{face_disp} | {datetime.now().strftime("%H:%M:%S")}</div>',
                     unsafe_allow_html=True)
-            else:
-                # Zone is clear — re-arm alarm for next intrusion
+
+            elif any(auth for *_, auth in intrusions):
+                # Someone in zone but they're authorized
+                authorized_names = ", ".join(set(fn for *_, fn, auth in intrusions if auth))
                 st.session_state.alarm_active = False
                 status_ph.markdown(
-                    '<div class="alert-box ok">✔ ZONE CLEAR</div>', unsafe_allow_html=True)
+                    f'<div class="alert-box ok">✅ AUTHORIZED ACCESS — {authorized_names}</div>',
+                    unsafe_allow_html=True)
 
-            frame_times.append(time.time()-t0)
-            fps = 1.0/(sum(frame_times)/len(frame_times)) if frame_times else 0
+            else:
+                # Truly clear
+                st.session_state.alarm_active = False
+                status_ph.markdown(
+                    '<div class="alert-box ok">✔ ZONE CLEAR</div>',
+                    unsafe_allow_html=True)
+
+            # ── FPS calculation ──────────────────────────────────────────
+            frame_times.append(time.time() - t0)
+            fps = 1.0 / (sum(frame_times) / len(frame_times)) if frame_times else 0
+
+            # Re-draw HUD with correct FPS now
             if show_hud:
-                draw_hud(frame, fps, sum(len(r.boxes) for r in results), fw)
+                draw_hud(frame, fps=fps,
+                         n_det=sum(len(r.boxes) for r in results),
+                         model_name=model_choice,
+                         night_on=night_mode_on, fr_on=face_rec_on)
 
-            feed_ph.image(cv2.cvtColor(frame,cv2.COLOR_BGR2RGB), channels="RGB", use_container_width=True)
+            feed_ph.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+                          channels="RGB", use_container_width=True)
 
+            # ── Right-panel KPIs ──────────────────────────────────────────
             kpi_ph.markdown(f"""
             <div class='kpi-card' style='margin-bottom:8px;'>
-              <div class='kpi-val {"danger" if st.session_state.total_today>0 else ""}'>{st.session_state.total_today}</div>
-              <div class='kpi-lbl'>TODAY'S INTRUSIONS</div>
+              <div class='kpi-val {"danger" if st.session_state.total_today>0 else ""}'>
+                {st.session_state.total_today}</div>
+              <div class='kpi-lbl'>INTRUSIONS TODAY</div>
+            </div>
+            <div class='kpi-card' style='margin-bottom:8px;'>
+              <div class='kpi-val' style='color:var(--accent);font-size:1.4rem;'>
+                {st.session_state.authorized_passes}</div>
+              <div class='kpi-lbl'>AUTHORIZED ACCESS</div>
             </div>
             <div class='kpi-card' style='margin-bottom:8px;'>
               <div class='kpi-val info'>{st.session_state.zone_breaches}</div>
@@ -1143,8 +1336,10 @@ elif menu == "📊 Dashboard":
         disp["Time"] = disp["Time"].dt.strftime("%Y-%m-%d %H:%M:%S")
         disp["Confidence"] = pd.to_numeric(disp["Confidence"],errors="coerce").map(
             lambda x: f"{x:.1%}" if pd.notna(x) else "")
-        st.dataframe(disp[["Time","Type","Confidence","Zone","Severity"]],
-                     use_container_width=True, hide_index=True)
+        show_cols = ["Time","Type","Confidence","Zone","Severity"]
+        if "FaceName" in disp.columns:
+            show_cols.append("FaceName")
+        st.dataframe(disp[show_cols], use_container_width=True, hide_index=True)
 
     with col_b:
         st.subheader("🎯 Intrusion Types")
@@ -1304,7 +1499,9 @@ elif menu == "⚙️ Settings":
         Model &nbsp;&nbsp;&nbsp;: {model_choice}<br>
         YOLO OK &nbsp;: {"LOADED" if model else "FAILED"}<br>
         Log File : {LOG_FILE}<br>
-        Snapshots: {len(os.listdir("intruders"))} files
+        Snapshots: {len(os.listdir("intruders"))} files<br>
+        Face Lib : {"INSTALLED" if FACE_LIB_OK else "NOT INSTALLED"}<br>
+        Encodings: {fr.encoding_count()} ({len(fr.known_people())} persons)
         </p></div>""", unsafe_allow_html=True)
 
         st.markdown("### Export Log")
@@ -1337,9 +1534,9 @@ elif menu == "⚙️ Settings":
         st.markdown("""
         <div class='alert-box info' style='line-height:2;'>
         Use <b>yolov8s</b> or <b>yolov8m</b> for best accuracy<br>
-        Confidence threshold: <b>0.30 – 0.45</b> recommended<br>
+        Confidence threshold: <b>0.30 - 0.45</b> recommended<br>
         Enable <b>Enhance Low-Light</b> in dim environments<br>
         Inference size <b>640</b> for best small-object detection<br>
-        Temporal Smoothing <b>2–3</b> removes single-frame false alerts<br>
+        Temporal Smoothing <b>2-3</b> removes single-frame false alerts<br>
         Ensure camera is at 720p+ with good lighting
         </div>""", unsafe_allow_html=True)
